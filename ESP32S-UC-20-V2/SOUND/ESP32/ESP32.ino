@@ -1,19 +1,23 @@
 #include <HardwareSerial.h>
-#include "ESP32_UC20.h"
+#include "TEE_UC20.h"
 #include "internet.h"
-#include "File.h"
 #include "http.h"
+#include "File.h"
+#include "ftp.h"
+#include "call.h"
+#include "sms.h"
 
 //SIM TRUE  internet
 #define APN "internet"
 #define USER "true"
 #define PASS "true"
 
-#define RXPIN  27
-#define TXPIN  26
+#define RXPIN  16
+#define TXPIN  17
 
 INTERNET net;
 UC_FILE file;
+FTP ftp;
 HTTP http;
 
 HardwareSerial mySerial(2);
@@ -28,17 +32,14 @@ void data_out(char data)
 }
 void setup()
 {
-  Serial.begin(115200);
-  gsm.begin(&mySerial, 115200, RXPIN, TXPIN);
-  gsm.Event_debug = debug;
-
-  gsm.SetPowerKeyPin();
+  Serial.begin(9600);
   Serial.println();
-  Serial.println(F("Safe-box"));
+  Serial.println(F("ESP32"));
+  gsm.begin(&mySerial, 9600, RXPIN, TXPIN);
+  gsm.Event_debug = debug;
+  Serial.println(F("UC20"));
   gsm.PowerOn();
   while (gsm.WaitReady()) {}
-
-  delay(8000);
   Serial.print(F("GetOperator --> "));
   Serial.println(gsm.GetOperator());
   Serial.print(F("SignalQuality --> "));
@@ -51,8 +52,6 @@ void setup()
   net.Connect();
   Serial.println(F("Show My IP"));
   Serial.println(net.GetIP());
-  delay(500);
-  
 }
 
 void loop()
