@@ -52,6 +52,7 @@ void setup()
   Serial.println(F("Show My IP"));
   Serial.println(net.GetIP());
   delay(500);
+  
 }
 
 void loop()
