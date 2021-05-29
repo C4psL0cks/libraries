@@ -1,12 +1,12 @@
 
 /**
- * Created February 17, 2021
+ * Created May 1, 2021
  * 
  * This work is a part of Firebase ESP Client library
- * Copyright (c) 2020, 2021 K. Suwatchai (Mobizt)
+ * Copyright (c) 2021 K. Suwatchai (Mobizt)
  * 
  * The MIT License (MIT)
- * Copyright (c) 2020, 2021 K. Suwatchai (Mobizt)
+ * Copyright (c) 2021 K. Suwatchai (Mobizt)
  * 
  * 
  * Permission is hereby granted, free of charge, to any person returning a copy of
@@ -64,7 +64,7 @@ class FunctionsConfig;
 #define QUEUE_TASK_STACK_SIZE 8192
 #define MAX_BLOB_PAYLOAD_SIZE 1024
 #define MAX_EXCHANGE_TOKEN_ATTEMPTS 5
-#define ESP_DEFAULT_TS 1510644967
+#define ESP_DEFAULT_TS 1618971013
 
 enum fb_esp_fcm_msg_mode
 {
@@ -332,6 +332,7 @@ struct fb_esp_rtdb_request_info_t
     std::string priority = "";
     std::string etag = "";
     bool queue = false;
+    bool async = false;
     std::string filename = "";
     //fb_esp_mem_storage_type storageType = mem_storage_type_undefined;
     uint8_t storageType = StorageType::UNDEFINED;
@@ -405,6 +406,7 @@ struct fb_esp_auth_token_info_t
     std::string jwt;
     std::string scope;
     unsigned long expires = 0;
+    unsigned long last_millis = 0;
     fb_esp_auth_token_type token_type = token_type_undefined;
     fb_esp_auth_token_status status = token_status_uninitialized;
     struct fb_esp_auth_token_error_t error;
@@ -465,7 +467,8 @@ struct fb_esp_token_signer_resources_t
     bool signup = false;
     bool tokenTaskRunning = false;
     unsigned long lastReqMillis = 0;
-    unsigned long preRefreshMillis = 5 * 60 * 1000;
+    unsigned long preRefreshSeconds = 60;
+    unsigned long expiredSeconds = 3600;
     unsigned long reqTO = 2000;
     std::string pk;
     size_t hashSize = 32; //SHA256 size (256 bits or 32 bytes)
@@ -589,9 +592,12 @@ typedef void (*TokenStatusCallback)(TokenInfo);
 struct fb_esp_cfg_t
 {
     struct fb_esp_service_account_t service_account;
+    //deprecated, use database_url instead
     std::string host;
+    std::string database_url;
     std::string api_key;
     float time_zone = 0;
+    size_t async_close_session_max_request = 100;
     struct fb_esp_auth_cert_t cert;
     struct fb_esp_token_signer_resources_t signer;
     struct fb_esp_cfg_int_t _int;
@@ -615,6 +621,8 @@ struct fb_esp_rtdb_info_t
     bool path_not_found = false;
     bool pause = false;
     bool stream_stop = true;
+    bool async = false;
+    size_t async_count = 0;
 
     uint8_t connection_status = 0;
     uint32_t queue_ID = 0;
@@ -966,7 +974,7 @@ struct fb_esp_session_info_t
     const uint32_t conn_timeout = 3 * 60 * 1000;
 
     uint16_t resp_size = 2048;
-    int http_code = -1000;
+    int http_code = FIREBASE_ERROR_HTTP_CODE_UNDEFINED;
     int content_length = 0;
     std::string error = "";
     struct fb_esp_rtdb_info_t rtdb;
@@ -1680,6 +1688,12 @@ static const char fb_esp_pgm_str_544[] PROGMEM = "The index of recipient device 
 static const char fb_esp_pgm_str_545[] PROGMEM = "create message digest";
 static const char fb_esp_pgm_str_546[] PROGMEM = "tokenProcessingTask";
 static const char fb_esp_pgm_str_547[] PROGMEM = "max token generation retry reached";
+static const char fb_esp_pgm_str_548[] PROGMEM = "0.0.0.0";
+static const char fb_esp_pgm_str_549[] PROGMEM = "error";
+static const char fb_esp_pgm_str_550[] PROGMEM = "rules";
+static const char fb_esp_pgm_str_551[] PROGMEM = "/.indexOn";
+static const char fb_esp_pgm_str_552[] PROGMEM = ".read";
+static const char fb_esp_pgm_str_553[] PROGMEM = ".write";
 
 static const unsigned char fb_esp_base64_table[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static const char fb_esp_boundary_table[] PROGMEM = "=_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";

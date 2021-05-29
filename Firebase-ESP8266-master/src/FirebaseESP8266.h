@@ -1,10 +1,14 @@
 /**
- * Google's Firebase Realtime Database Arduino Library for ESP8266, version 3.1.1
+ * Google's Firebase Realtime Database Arduino Library for ESP8266, version 3.1.13
  * 
- * March 14, 2021
- * 
+ * May 4, 2021
+ *
  *   Updates:
- * - Fix the id token refreshment infinite loop.
+ * 
+ * - Fix multiPathStream issue with token authentication.
+ * - Add uninitialized handler.
+ * - Add RTDB setAsync, pushAsync and updateNodeAsync functions for faster store.
+ *
  * 
  * This library provides ESP8266 to perform REST API by GET PUT, POST, PATCH, DELETE data from/to with Google's Firebase database using get, set, update
  * and delete calls. 
@@ -51,7 +55,6 @@
 #include "rtdb/FB_RTDB.h"
 #include "Utils.h"
 
-
 class FirebaseESP8266
 {
   friend class QueryFilter;
@@ -59,7 +62,7 @@ class FirebaseESP8266
 
 public:
   FB_RTDB RTDB;
-  
+
   FirebaseESP8266();
   ~FirebaseESP8266();
 
@@ -97,10 +100,22 @@ public:
   */
   struct token_info_t authTokenInfo();
 
-  /** Store Firebase's authentication credentials using database secret (obsoleted)..
+  /** Provide the ready state of token generation.
    * 
-   * @param host Your Firebase database project host e.g. Your_ProjectID.firebaseio.com.
-   * @param auth Your database secret.
+   * @return Boolean type status indicates the token generation is completed.
+  */
+  bool ready();
+
+  /** Provide the grant access status for Firebase Services.
+   *
+   * @return Boolean type status indicates the device can access to the services
+  */
+  bool authenticated();
+
+  /** Store Firebase's legacy authentication credentials.
+   * 
+   * @param databaseURL Your RTDB URL e.g. <databaseName>.firebaseio.com or <databaseName>.<region>.firebasedatabase.app
+   * @param databaseSecret Your database secret.
    * @param caCert Root CA certificate base64 string (PEM file).
    * @param caCertFile Root CA certificate DER file (binary).
    * @param StorageType Type of storage, StorageType::SD and StorageType::FLASH.
@@ -112,11 +127,11 @@ public:
    * 
    * The file systems for flash and sd memory can be changed in FirebaseFS.h.
   */
-  void begin(const String &host, const String &auth);
+  void begin(const String &databaseURL, const String &databaseSecret);
 
-  void begin(const String &host, const String &auth, const char *caCert, float GMTOffset = 0.0);
+  void begin(const String &databaseURL, const String &databaseSecret, const char *caCert, float GMTOffset = 0.0);
 
-  void begin(const String &host, const String &auth, const String &caCertFile, uint8_t storageType, float GMTOffset = 0.0);
+  void begin(const String &databaseURL, const String &databaseSecret, const String &caCertFile, uint8_t storageType, float GMTOffset = 0.0);
 
   /** Stop Firebase and release all resources.
    * 
@@ -226,6 +241,46 @@ public:
   */
   bool setRules(FirebaseData &fbdo, const String &rules);
 
+  /** Set the .read and .write database rules.
+   * 
+   * @param fbdo The pointer to Firebase Data Object.
+   * @param path The parent path of child's node that the .read and .write rules are being set.
+   * @param var The child node key that the .read and .write rules are being set.
+   * @param readVal The child node key .read value.
+   * @param writeVal The child node key .write value.
+   * @param databaseSecret The database secret. 
+   * @return Boolean value, indicates the success of the operation.
+   * 
+   * @note The databaseSecret can be empty if the auth type is OAuth2.0 or legacy and required if auth type
+   * is Email/Password sign-in.
+  */
+  bool setReadWriteRules(FirebaseData &fbdo, const String &path, const String &var, const String &readVal, const String &writeVal, const String &databaseSecret);
+
+  /** Set the query index to the database rules.
+   * 
+   * @param fbdo The pointer to Firebase Data Object.
+   * @param path The parent path of child's node that being query.
+   * @param node The child node key that being query.
+   * @param databaseSecret The database secret. 
+   * @return Boolean value, indicates the success of the operation.
+   * 
+   * @note The databaseSecret can be empty if the auth type is OAuth2.0 or legacy and required if auth type
+   * is Email/Password sign-in.
+  */
+  bool setQueryIndex(FirebaseData &fbdo, const String &path, const String &node, const String &databaseSecret);
+
+  /** Remove the query index from the database rules.
+   * 
+   * @param fbdo The pointer to Firebase Data Object.
+   * @param path The parent path of child's node that the index is being removed.
+   * @param databaseSecret The database secret. 
+   * @return Boolean value, indicates the success of the operation.
+   * 
+   * @note The databaseSecret can be empty if the auth type is OAuth2.0 or legacy and required if auth type
+   * is Email/Password sign-in.
+  */
+  bool removeQueryIndex(FirebaseData &fbdo, const String &path, const String &databaseSecret);
+
   /** Determine whether the defined database path exists or not.
    * 
    * @param fbdo Firebase Data Object to hold data and instance.
@@ -233,6 +288,7 @@ public:
    * @return Boolean type result indicates whether the defined path existed or not.
    */
   bool pathExist(FirebaseData &fbdo, const String &path);
+  bool pathExisted(FirebaseData &fbdo, const String &path);
 
   /** Determine the unique identifier (ETag) of current data at the defined database path.
    * 
@@ -275,6 +331,8 @@ public:
    */
   bool setPriority(FirebaseData &fbdo, const String &path, float priority);
 
+  bool setPriorityAsync(FirebaseData &fbdo, const String &path, float priority);
+
   /** Read the virtual child node ".priority" value at the defined database path.
    * 
    * @param fbdo Firebase Data Object to hold data and instance.
@@ -299,11 +357,19 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, int intValue);
 
+  bool pushIntAsync(FirebaseData &fbdo, const String &path, int intValue);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, int intValue);
+
   /** Append new integer value and the virtual child ".priority" to the defined database path.
   */
   bool pushInt(FirebaseData &fbdo, const String &path, int intValue, float priority);
 
   bool push(FirebaseData &fbdo, const String &path, int intValue, float priority);
+
+  bool pushIntAsync(FirebaseData &fbdo, const String &path, int intValue, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, int intValue, float priority);
 
   /** Append new float value to the defined database path.
    * 
@@ -319,11 +385,19 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, float floatValue);
 
+  bool pushFloatAsync(FirebaseData &fbdo, const String &path, float floatValue);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, float floatValue);
+
   /** Append new float value and the virtual child ".priority" to the defined database path.
   */
   bool pushFloat(FirebaseData &fbdo, const String &path, float floatValue, float priority);
 
   bool push(FirebaseData &fbdo, const String &path, float floatValue, float priority);
+
+  bool pushFloatAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority);
 
   /** Append new double value (8 bytes) to the defined database path.
    * 
@@ -339,11 +413,19 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, double doubleValue);
 
+  bool pushDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, double doubleValue);
+
   /** Append new double value (8 bytes) and the virtual child ".priority" to the defined database path.
   */
   bool pushDouble(FirebaseData &fbdo, const String &path, double doubleValue, float priority);
 
   bool push(FirebaseData &fbdo, const String &path, double doubleValue, float priority);
+
+  bool pushDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority);
 
   /** Append new Boolean value to the defined database path.
    * 
@@ -360,11 +442,19 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, bool boolValue);
 
+  bool pushBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, bool boolValue);
+
   /** Append the new Boolean value and the virtual child ".priority" to the defined database path.
   */
   bool pushBool(FirebaseData &fbdo, const String &path, bool boolValue, float priority);
 
   bool push(FirebaseData &fbdo, const String &path, bool boolValue, float priority);
+
+  bool pushBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority);
 
   /** Append a new string (text) to the defined database path.
    * 
@@ -382,7 +472,11 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, const String &stringValue);
 
-  bool push(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue);
+  bool pushStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, const char *stringValue);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, const String &stringValue);
 
   /** Append new string (text) and the virtual child ".priority" to the defined database path.
   */
@@ -392,7 +486,11 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, const String &stringValue, float priority);
 
-  bool push(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue, float priority);
+  bool pushStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, const char *stringValue, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority);
 
   /** Append new child nodes key and value (using FirebaseJson object) to the defined database path.
    * 
@@ -408,11 +506,19 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, FirebaseJson &json);
 
+  bool pushJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json);
+
   /** Append new child node key and value (FirebaseJson object) and the virtual child ".priority" to the defined database path.
   */
   bool pushJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
 
   bool push(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
+
+  bool pushJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
 
   /** Append child node array (using FirebaseJsonArray object) to the defined database path. 
    * This will replace any child nodes inside the defined path with array defined in FirebaseJsonArray object.
@@ -429,12 +535,20 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr);
 
+  bool pushArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr);
+
   /** Append FirebaseJsonArray object and virtual child ".priority" at the defined database path.
   */
 
   bool pushArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority);
 
   bool push(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority);
+
+  bool pushArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority);
 
   /** Append new blob (binary data) to the defined database path.
    * 
@@ -451,11 +565,19 @@ public:
 
   bool push(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size);
 
+  bool pushBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size);
+
   /** Append new blob (binary data) and the virtual child ".priority" to the defined database path.
   */
   bool pushBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority);
 
   bool push(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority);
+
+  bool pushBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority);
 
   /** Append new binary data from the file stores on SD card/Flash memory to the defined database path.
    * 
@@ -474,12 +596,20 @@ public:
 
   bool push(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName);
 
+  bool pushFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName);
+
+  bool pushAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName);
+
   /** Append new binary data from the file stores on SD card/Flash memory and the virtual child ".priority" 
    * to the defined database path.
   */
   bool pushFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority);
 
   bool push(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority);
+
+  bool pushFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority);
+
+  bool pushAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority);
 
   /** Append the new Firebase server's timestamp to the defined database path.*
    * 
@@ -491,6 +621,8 @@ public:
    * which its value can be accessed via function [FirebaseData object].pushName().
    */
   bool pushTimestamp(FirebaseData &fbdo, const String &path);
+
+  bool pushTimestampAsync(FirebaseData &fbdo, const String &path);
 
   /** Set integer data at the defined database path.
    * 
@@ -507,11 +639,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, int intValue);
 
+  bool setIntAsync(FirebaseData &fbdo, const String &path, int intValue);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, int intValue);
+
   /** Set integer data and virtual child ".priority" at the defined database path.
   */
   bool setInt(FirebaseData &fbdo, const String &path, int intValue, float priority);
 
   bool set(FirebaseData &fbdo, const String &path, int intValue, float priority);
+
+  bool setIntAsync(FirebaseData &fbdo, const String &path, int intValue, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, int intValue, float priority);
 
   /** Set integer data at the defined database path if defined database path's ETag matched the ETag value.
    * 
@@ -532,11 +672,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, int intValue, const String &ETag);
 
+  bool setIntAsync(FirebaseData &fbdo, const String &path, int intValue, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, int intValue, const String &ETag);
+
   /** Set integer data and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
   bool setInt(FirebaseData &fbdo, const String &path, int intValue, float priority, const String &ETag);
 
   bool set(FirebaseData &fbdo, const String &path, int intValue, float priority, const String &ETag);
+
+  bool setIntAsync(FirebaseData &fbdo, const String &path, int intValue, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, int intValue, float priority, const String &ETag);
 
   /** Set float data at the defined database path.
    * 
@@ -553,11 +701,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, float floatValue);
 
+  bool setFloatAsync(FirebaseData &fbdo, const String &path, float floatValue);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, float floatValue);
+
   /** Set float data and virtual child ".priority" at the defined database path.
   */
   bool setFloat(FirebaseData &fbdo, const String &path, float floatValue, float priority);
 
   bool set(FirebaseData &fbdo, const String &path, float floatValue, float priority);
+
+  bool setFloatAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority);
 
   /** Set float data at the defined database path if defined database path's ETag matched the ETag value.
    * 
@@ -580,11 +736,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, float floatValue, const String &ETag);
 
+  bool setFloatAsync(FirebaseData &fbdo, const String &path, float floatValue, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, float floatValue, const String &ETag);
+
   /** Set float data and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
   bool setFloat(FirebaseData &fbdo, const String &path, float floatValue, float priority, const String &ETag);
 
   bool set(FirebaseData &fbdo, const String &path, float floatValue, float priority, const String &ETag);
+
+  bool setFloatAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority, const String &ETag);
 
   /** Set double data at the defined database path.
    * 
@@ -603,11 +767,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, double doubleValue);
 
+  bool setDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, double doubleValue);
+
   /** Set double data and virtual child ".priority" at the defined database path.
   */
   bool setDouble(FirebaseData &fbdo, const String &path, double doubleValue, float priority);
 
   bool set(FirebaseData &fbdo, const String &path, double doubleValue, float priority);
+
+  bool setDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority);
 
   /** Set double data at the defined database path if defined database path's ETag matched the ETag value.
    * 
@@ -630,11 +802,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, double doubleValue, const String &ETag);
 
+  bool setDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, double doubleValue, const String &ETag);
+
   /** Set double data and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
   bool setDouble(FirebaseData &fbdo, const String &path, double doubleValue, float priority, const String &ETag);
 
   bool set(FirebaseData &fbdo, const String &path, double doubleValue, float priority, const String &ETag);
+
+  bool setDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority, const String &ETag);
 
   /** Set Boolean data at the defined database path.
    * 
@@ -651,11 +831,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, bool boolValue);
 
+  bool setBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, bool boolValue);
+
   /** Set boolean data and virtual child ".priority" at the defined database path.
   */
   bool setBool(FirebaseData &fbdo, const String &path, bool boolValue, float priority);
 
   bool set(FirebaseData &fbdo, const String &path, bool boolValue, float priority);
+
+  bool setBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority);
 
   /** Set Boolean data at the defined database path if defined database path's ETag matched the ETag value.
    * 
@@ -679,11 +867,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, bool boolValue, const String &ETag);
 
+  bool setBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, bool boolValue, const String &ETag);
+
   /** Set boolean data and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
   bool setBool(FirebaseData &fbdo, const String &path, bool boolValue, float priority, const String &ETag);
 
   bool set(FirebaseData &fbdo, const String &path, bool boolValue, float priority, const String &ETag);
+
+  bool setBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority, const String &ETag);
 
   /** Set string (text) at the defined database path. 
    * 
@@ -704,7 +900,11 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, const String &stringValue);
 
-  bool set(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue);
+  bool setStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, const char *stringValue);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, const String &stringValue);
 
   /** Set string data and virtual child ".priority" at the defined database path.
   */
@@ -714,7 +914,11 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, const String &stringValue, float priority);
 
-  bool set(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue, float priority);
+  bool setStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, const char *stringValue, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority);
 
   /** Set string (text) at the defined database path if defined database path's ETag matched the ETag value.
    * 
@@ -741,7 +945,11 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, const String &stringValue, const String &ETag);
 
-  bool set(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue, const String &ETag);
+  bool setStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, const char *stringValue, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, const String &stringValue, const String &ETag);
 
   /** Set string data and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
@@ -751,7 +959,11 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, const String &stringValue, float priority, const String &ETag);
 
-  bool set(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue, float priority, const String &ETag);
+  bool setStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, const char *stringValue, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority, const String &ETag);
 
   /** Set the child node key and value (using FirebaseJson object) to the defined database path. 
    * This will replace any child nodes inside the defined path with node' s key 
@@ -770,12 +982,20 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, FirebaseJson &json);
 
+  bool setJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json);
+
   /** Set JSON data or FirebaseJson object and virtual child ".priority" at the defined database path.
   */
 
   bool setJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
 
   bool set(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
+
+  bool setJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
 
   /** Set child node key and value (using JSON data or FirebaseJson object) to the defined database path 
    * if defined database path's ETag matched the ETag value. 
@@ -802,12 +1022,20 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, FirebaseJson &json, const String &ETag);
 
+  bool setJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, const String &ETag);
+
   /** Set JSON data or FirebaseJson object and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
 
   bool setJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority, const String &ETag);
 
   bool set(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority, const String &ETag);
+
+  bool setJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority, const String &ETag);
 
   /** Set child node array (using FirebaseJsonArray object) to the defined database path. 
    * This will replace any child nodes inside the defined path with array defined in FirebaseJsonArray object.
@@ -826,11 +1054,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr);
 
+  bool setArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr);
+
   /** Set FirebaseJsonArray object and virtual child ".priority" at the defined database path.
   */
   bool setArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority);
 
   bool set(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority);
+
+  bool setArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority);
 
   /** Set array (using JSON data or FirebaseJson object) to the defined database path if defined database path's ETag matched the ETag value. 
    * This will replace any child nodes inside the defined path with array defined in FirebaseJsonArray object.
@@ -856,11 +1092,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, const String &ETag);
 
+  bool setArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, const String &ETag);
+
   /** Set FirebaseJsonArray object and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
   bool setArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority, const String &ETag);
 
   bool set(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority, const String &ETag);
+
+  bool setArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority, const String &ETag);
 
   /** Set blob (binary data) at the defined database path. 
    * This will replace any child nodes inside the defined path with a blob or binary data.
@@ -877,11 +1121,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size);
 
+  bool setBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size);
+
   /** Set blob data and virtual child ".priority" at the defined database path.
   */
   bool setBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority);
 
   bool set(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority);
+
+  bool setBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority);
 
   /** Set blob (binary data) at the defined database path if defined database path's ETag matched the ETag value. 
    * This will replace any child nodes inside the defined path with a blob or binary data.
@@ -901,11 +1153,19 @@ public:
 
   bool set(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, const String &ETag);
 
+  bool setBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, const String &ETag);
+
   /** Set blob data and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
   bool setBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority, const String &ETag);
 
   bool set(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority, const String &ETag);
+
+  bool setBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority, const String &ETag);
 
   /** Set binary data from the file store on SD card/Flash memory to the defined database path. 
    * 
@@ -915,19 +1175,27 @@ public:
    * @param fileName File name included its path in SD card/Flash memory
    * @return Boolean type status indicates the success of the operation. 
    * 
-   * @note No payload returned from the server.
-   * 
    * The file systems for flash and sd memory can be changed in FirebaseFS.h.
+   * 
+   * @note No payload returned from the server.
   */
   bool setFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName);
 
   bool set(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName);
+
+  bool setFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName);
+
+  bool setAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName);
 
   /** Set binary data from the file and virtual child ".priority" at the defined database path.
   */
   bool setFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority);
 
   bool set(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority);
+
+  bool setFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority);
+
+  bool setAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority);
 
   /** Set binary data from file stored on SD card/Flash memory to the defined database path if defined database path's ETag matched the ETag value.
    * 
@@ -938,22 +1206,30 @@ public:
    * @param ETag Known unique identifier string (ETag) of defined database path.
    * @return Boolean type status indicates the success of the operation.
    * 
-   * @note No payload returned from the server.
-   * 
-   * The file systems for flash and sd memory can be changed in FirebaseFS.h.
+   * @note No payload returned from the server. 
    * 
    * If ETag at the defined database path does not match the provided ETag parameter, 
    * the operation will fail with HTTP code 412, Precondition Failed (ETag is not matched).
+   * 
+   * The file systems for flash and sd memory can be changed in FirebaseFS.h.
   */
   bool setFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, const String &ETag);
 
   bool set(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, const String &ETag);
+
+  bool setFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, const String &ETag);
 
   /** Set binary data from the file and the virtual child ".priority" if defined ETag matches at the defined database path 
   */
   bool setFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority, const String &ETag);
 
   bool set(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority, const String &ETag);
+
+  bool setFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority, const String &ETag);
+
+  bool setAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority, const String &ETag);
 
   /** Set Firebase server's timestamp to the defined database path.
    * 
@@ -969,6 +1245,8 @@ public:
   */
   bool setTimestamp(FirebaseData &fbdo, const String &path);
 
+  bool setTimestampAsync(FirebaseData &fbdo, const String &path);
+
   /** Update the child node key or existing key's value (using FirebaseJson object) under the defined database path.
    * 
    * @param fbdo Firebase Data Object to hold data and instance.
@@ -983,9 +1261,13 @@ public:
   */
   bool updateNode(FirebaseData &fbdo, const String path, FirebaseJson &json);
 
+  bool updateNodeAsync(FirebaseData &fbdo, const String path, FirebaseJson &json);
+
   /** Update child node key or existing key's value and virtual child ".priority" (using JSON data or FirebaseJson object) under the defined database path.
   */
   bool updateNode(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
+
+  bool updateNodeAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
 
   /** Update the child node key or existing key's value (using FirebaseJson object) under the defined database path.
    * 
@@ -999,10 +1281,14 @@ public:
   */
   bool updateNodeSilent(FirebaseData &fbdo, const String &path, FirebaseJson &json);
 
+  bool updateNodeSilentAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json);
+
   /** Update child node key or existing key's value and virtual child ".priority" (using JSON data or FirebaseJson object) under the defined database path.
   */
 
   bool updateNodeSilent(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
+
+  bool updateNodeSilentAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority);
 
   /** Read any type of value at the defined database path.
    * 
@@ -1635,10 +1921,17 @@ public:
 
   /** SD card config with GPIO pins.
      * 
-     * @param ss -   SPI Chip/Slave Select pin.
+     * @param ss SPI Chip/Slave Select pin.
      * @return Boolean type status indicates the success of the operation.
     */
   bool sdBegin(int8_t ss);
+
+  /** Set system time with timestamp.
+     *
+     * @param ts timestamp in seconds from midnight Jan 1, 1970.
+     * @return Boolean type status indicates the success of the operation.
+    */
+  bool setSystemTime(time_t ts);
 
   void errorToString(int httpCode, std::string &buff);
 
@@ -1681,6 +1974,7 @@ public:
 private:
   bool handleFCMRequest(FirebaseData &fbdo, fb_esp_fcm_msg_type messageType);
   fb_esp_mem_storage_type getMemStorageType(uint8_t old_type);
+  void init(FirebaseConfig *config, FirebaseAuth *auth);
 
   UtilsClass *ut = nullptr;
   FirebaseAuth *_auth = nullptr;
@@ -1689,7 +1983,6 @@ private:
   FirebaseAuth _auth_;
   FirebaseConfig _cfg_;
 };
-
 
 extern FirebaseESP8266 Firebase;
 

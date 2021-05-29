@@ -1,10 +1,14 @@
 /**
- * Google's Firebase Realtime Database Arduino Library for ESP8266, version 3.1.1
+ * Google's Firebase Realtime Database Arduino Library for ESP8266, version 3.1.13
  * 
- * March 14, 2021
- * 
+ * May 4, 2021
+ *
  *   Updates:
- * - Fix the id token refreshment infinite loop.
+ * 
+ * - Fix multiPathStream issue with token authentication.
+ * - Add uninitialized handler.
+ * - Add RTDB setAsync, pushAsync and updateNodeAsync functions for faster store.
+ *
  * 
  * This library provides ESP8266 to perform REST API by GET PUT, POST, PATCH, DELETE data from/to with Google's Firebase database using get, set, update
  * and delete calls. 
@@ -52,25 +56,7 @@ FirebaseESP8266::~FirebaseESP8266()
 
 void FirebaseESP8266::begin(FirebaseConfig *config, FirebaseAuth *auth)
 {
-    _auth = auth;
-    _cfg = config;
-
-    if (_cfg == nullptr)
-        _cfg = &_cfg_;
-
-    if (_auth == nullptr)
-        _auth = &_auth_;
-
-    ut = new UtilsClass(_cfg);
-
-    RTDB.begin(ut);
-
-    _cfg->_int.fb_reconnect_wifi = WiFi.getAutoReconnect();
-
-    _cfg->signer.signup = false;
-    _cfg_.signer.signup = false;
-    Signer.begin(ut, _cfg, _auth);
-    std::string().swap(_cfg_.signer.tokens.error.message);
+    init(config, auth);
 
     if (_cfg->service_account.json.path.length() > 0)
     {
@@ -94,11 +80,13 @@ void FirebaseESP8266::begin(FirebaseConfig *config, FirebaseAuth *auth)
     _cfg->_int.fb_auth_uri = _cfg->signer.tokens.token_type == token_type_legacy_token || _cfg->signer.tokens.token_type == token_type_id_token;
 
     if (_cfg->host.length() > 0)
-    {
-        ut->getUrlInfo(_cfg->host.c_str(), uinfo);
-        _cfg->host = uinfo.host;
-    }
+        _cfg->database_url = _cfg->host;
 
+    if (_cfg->database_url.length() > 0)
+    {
+        ut->getUrlInfo(_cfg->database_url.c_str(), uinfo);
+        _cfg->database_url = uinfo.host;
+    }
     if (strlen_P(_cfg->cert.data))
         _cfg->_int.fb_caCert = _cfg->cert.data;
 
@@ -113,17 +101,17 @@ void FirebaseESP8266::begin(FirebaseConfig *config, FirebaseAuth *auth)
     Signer.handleToken();
 }
 
-void FirebaseESP8266::begin(const String &host, const String &auth)
+void FirebaseESP8266::begin(const String &databaseURL, const String &databaseSecret)
 {
-    _cfg_.host = host.c_str();
-    _cfg_.signer.tokens.legacy_token = auth.c_str();
+    _cfg_.database_url = databaseURL.c_str();
+    _cfg_.signer.tokens.legacy_token = databaseSecret.c_str();
     begin(&_cfg_, &_auth_);
 }
 
-void FirebaseESP8266::begin(const String &host, const String &auth, const char *caCert, float GMTOffset)
+void FirebaseESP8266::begin(const String &databaseURL, const String &databaseSecret, const char *caCert, float GMTOffset)
 {
-    _cfg_.host = host.c_str();
-    _cfg_.signer.tokens.legacy_token = auth.c_str();
+    _cfg_.database_url = databaseURL.c_str();
+    _cfg_.signer.tokens.legacy_token = databaseSecret.c_str();
     if (strlen_P(caCert))
     {
         float _gmtOffset = GMTOffset;
@@ -135,10 +123,10 @@ void FirebaseESP8266::begin(const String &host, const String &auth, const char *
     begin(&_cfg_, &_auth_);
 }
 
-void FirebaseESP8266::begin(const String &host, const String &auth, const String &caCertFile, uint8_t storageType, float GMTOffset)
+void FirebaseESP8266::begin(const String &databaseURL, const String &databaseSecret, const String &caCertFile, uint8_t storageType, float GMTOffset)
 {
-    _cfg_.host = host.c_str();
-    _cfg_.signer.tokens.legacy_token = auth.c_str();
+    _cfg_.database_url = databaseURL.c_str();
+    _cfg_.signer.tokens.legacy_token = databaseSecret.c_str();
     if (caCertFile.length() > 0)
     {
         float _gmtOffset = GMTOffset;
@@ -153,30 +141,19 @@ void FirebaseESP8266::begin(const String &host, const String &auth, const String
 
 bool FirebaseESP8266::signUp(FirebaseConfig *config, FirebaseAuth *auth, const char *email, const char *password)
 {
-    _auth = auth;
-    _cfg = config;
-
-    if (_auth == nullptr)
-        _auth = &_auth_;
-    if (_cfg == nullptr)
-        _cfg = &_cfg_;
-
+    init(config, auth);
     return Signer.getIdToken(true, email, password);
 }
 
 bool FirebaseESP8266::sendEmailVerification(FirebaseConfig *config, const char *idToken)
 {
-    _cfg = config;
-    if (_cfg == nullptr)
-        _cfg = &_cfg_;
+    init(config, nullptr);
     return Signer.handleEmailSending(idToken, fb_esp_user_email_sending_type_verify);
 }
 
 bool FirebaseESP8266::sendResetPassword(FirebaseConfig *config, const char *email)
 {
-    _cfg = config;
-    if (_cfg == nullptr)
-        _cfg = &_cfg_;
+    init(config, nullptr);
     return Signer.handleEmailSending(email, fb_esp_user_email_sending_type_reset_psw);
 }
 
@@ -190,6 +167,42 @@ void FirebaseESP8266::end(FirebaseData &fbdo)
 struct token_info_t FirebaseESP8266::authTokenInfo()
 {
     return Signer.tokenInfo;
+}
+
+bool FirebaseESP8266::ready()
+{
+    return Signer.tokenReady();
+}
+
+bool FirebaseESP8266::authenticated()
+{
+    return Signer.authenticated;
+}
+
+void FirebaseESP8266::init(FirebaseConfig *config, FirebaseAuth *auth)
+{
+    _auth = auth;
+    _cfg = config;
+
+    if (_cfg == nullptr)
+        _cfg = &_cfg_;
+
+    if (_auth == nullptr)
+        _auth = &_auth_;
+
+    if (ut)
+        delete ut;
+
+    ut = new UtilsClass(config);
+
+    RTDB.begin(ut);
+
+    _cfg->_int.fb_reconnect_wifi = WiFi.getAutoReconnect();
+
+    _cfg->signer.signup = false;
+    _cfg_.signer.signup = false;
+    Signer.begin(ut, _cfg, _auth);
+    std::string().swap(_cfg_.signer.tokens.error.message);
 }
 
 void FirebaseESP8266::reconnectWiFi(bool reconnect)
@@ -229,17 +242,29 @@ bool FirebaseESP8266::setRules(FirebaseData &fbdo, const String &rules)
     return RTDB.setRules(&fbdo, rules.c_str());
 }
 
+bool FirebaseESP8266::setQueryIndex(FirebaseData &fbdo, const String &path, const String &node, const String &databaseSecret)
+{
+    return RTDB.setQueryIndex(&fbdo, path.c_str(), node.c_str(), databaseSecret.c_str());
+}
+
+bool FirebaseESP8266::removeQueryIndex(FirebaseData &fbdo, const String &path, const String &databaseSecret)
+{
+    return RTDB.removeQueryIndex(&fbdo, path.c_str(), databaseSecret.c_str());
+}
+
+bool FirebaseESP8266::setReadWriteRules(FirebaseData &fbdo, const String &path, const String &var, const String &readVal, const String &writeVal, const String &databaseSecret)
+{
+    return RTDB.setReadWriteRules(&fbdo, path.c_str(), var.c_str(), readVal.c_str(), writeVal.c_str(), databaseSecret.c_str());
+}
+
 bool FirebaseESP8266::pathExist(FirebaseData &fbdo, const String &path)
 {
-    fbdo.queryFilter.clear();
-    struct fb_esp_rtdb_request_info_t req;
-    req.path = path.c_str();
-    req.method = m_get_nocontent;
-    req.dataType = d_string;
-    if (RTDB.handleRequest(&fbdo, &req))
-        return !fbdo._ss.rtdb.path_not_found;
-    else
-        return false;
+    return RTDB.pathExisted(&fbdo, path.c_str());
+}
+
+bool FirebaseESP8266::pathExisted(FirebaseData &fbdo, const String &path)
+{
+    return RTDB.pathExisted(&fbdo, path.c_str());
 }
 
 String FirebaseESP8266::getETag(FirebaseData &fbdo, const String &path)
@@ -262,6 +287,11 @@ bool FirebaseESP8266::setPriority(FirebaseData &fbdo, const String &path, float 
     return RTDB.setPriority(&fbdo, path.c_str(), priority);
 }
 
+bool FirebaseESP8266::setPriorityAsync(FirebaseData &fbdo, const String &path, float priority)
+{
+    return RTDB.setPriorityAsync(&fbdo, path.c_str(), priority);
+}
+
 bool FirebaseESP8266::getPriority(FirebaseData &fbdo, const String &path)
 {
     return RTDB.getPriority(&fbdo, path.c_str());
@@ -272,9 +302,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, int intValue)
     return RTDB.pushInt(&fbdo, path.c_str(), intValue);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, int intValue)
+{
+    return RTDB.pushIntAsync(&fbdo, path.c_str(), intValue);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, int intValue, float priority)
 {
     return RTDB.pushInt(&fbdo, path.c_str(), intValue, priority);
+}
+
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, int intValue, float priority)
+{
+    return RTDB.pushIntAsync(&fbdo, path.c_str(), intValue, priority);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, float floatValue)
@@ -282,9 +322,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, float floatVa
     return RTDB.pushFloat(&fbdo, path.c_str(), floatValue);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, float floatValue)
+{
+    return RTDB.pushFloatAsync(&fbdo, path.c_str(), floatValue);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, float floatValue, float priority)
 {
     return RTDB.pushFloat(&fbdo, path.c_str(), floatValue, priority);
+}
+
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority)
+{
+    return RTDB.pushFloatAsync(&fbdo, path.c_str(), floatValue, priority);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, double doubleValue)
@@ -292,9 +342,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, double double
     return RTDB.pushDouble(&fbdo, path.c_str(), doubleValue);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, double doubleValue)
+{
+    return RTDB.pushDoubleAsync(&fbdo, path.c_str(), doubleValue);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, double doubleValue, float priority)
 {
     return RTDB.pushDouble(&fbdo, path.c_str(), doubleValue, priority);
+}
+
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority)
+{
+    return RTDB.pushDoubleAsync(&fbdo, path.c_str(), doubleValue, priority);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, bool boolValue)
@@ -302,9 +362,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, bool boolValu
     return RTDB.pushBool(&fbdo, path.c_str(), boolValue);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, bool boolValue)
+{
+    return RTDB.pushBoolAsync(&fbdo, path.c_str(), boolValue);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, bool boolValue, float priority)
 {
     return RTDB.pushBool(&fbdo, path.c_str(), boolValue, priority);
+}
+
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority)
+{
+    return RTDB.pushBoolAsync(&fbdo, path.c_str(), boolValue, priority);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, const char *stringValue)
@@ -312,14 +382,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, const char *s
     return RTDB.pushString(&fbdo, path.c_str(), stringValue);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, const char *stringValue)
+{
+    return RTDB.pushStringAsync(&fbdo, path.c_str(), stringValue);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, const String &stringValue)
 {
     return RTDB.pushString(&fbdo, path.c_str(), stringValue);
 }
 
-bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue)
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, const String &stringValue)
 {
-    return RTDB.pushString(&fbdo, path.c_str(), stringValue);
+    return RTDB.pushStringAsync(&fbdo, path.c_str(), stringValue);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, const char *stringValue, float priority)
@@ -327,14 +402,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, const char *s
     return RTDB.pushString(&fbdo, path.c_str(), stringValue, priority);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, const char *stringValue, float priority)
+{
+    return RTDB.pushStringAsync(&fbdo, path.c_str(), stringValue, priority);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, const String &stringValue, float priority)
 {
     return RTDB.pushString(&fbdo, path.c_str(), stringValue, priority);
 }
 
-bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue, float priority)
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority)
 {
-    return RTDB.pushString(&fbdo, path.c_str(), stringValue, priority);
+    return RTDB.pushStringAsync(&fbdo, path.c_str(), stringValue, priority);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, FirebaseJson &json)
@@ -342,9 +422,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, FirebaseJson 
     return RTDB.pushJSON(&fbdo, path.c_str(), &json);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json)
+{
+    return RTDB.pushJSONAsync(&fbdo, path.c_str(), &json);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
 {
     return RTDB.pushJSON(&fbdo, path.c_str(), &json, priority);
+}
+
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
+{
+    return RTDB.pushJSONAsync(&fbdo, path.c_str(), &json, priority);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr)
@@ -352,9 +442,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, FirebaseJsonA
     return RTDB.pushArray(&fbdo, path.c_str(), &arr);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr)
+{
+    return RTDB.pushArrayAsync(&fbdo, path.c_str(), &arr);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority)
 {
     return RTDB.pushArray(&fbdo, path.c_str(), &arr, priority);
+}
+
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority)
+{
+    return RTDB.pushArrayAsync(&fbdo, path.c_str(), &arr, priority);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size)
@@ -362,9 +462,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, uint8_t *blob
     return RTDB.pushBlob(&fbdo, path.c_str(), blob, size);
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size)
+{
+    return RTDB.pushBlobAsync(&fbdo, path.c_str(), blob, size);
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority)
 {
     return RTDB.pushBlob(&fbdo, path.c_str(), blob, size, priority);
+}
+
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority)
+{
+    return RTDB.pushBlobAsync(&fbdo, path.c_str(), blob, size, priority);
 }
 
 bool FirebaseESP8266::push(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName)
@@ -372,9 +482,19 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, uint8_t storageType, const String
     return RTDB.pushFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str());
 }
 
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName)
+{
+    return RTDB.pushFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str());
+}
+
 bool FirebaseESP8266::push(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority)
 {
     return RTDB.pushFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority);
+}
+
+bool FirebaseESP8266::pushAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority)
+{
+    return RTDB.pushFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority);
 }
 
 template <typename T>
@@ -389,8 +509,6 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, T value)
     else if (std::is_same<T, const char *>::value)
         return pushString(fbdo, path, value);
     else if (std::is_same<T, const String &>::value)
-        return pushString(fbdo, path, value);
-    else if (std::is_same<T, const StringSumHelper &>::value)
         return pushString(fbdo, path, value);
     else if (std::is_same<T, FirebaseJson &>::value)
         return pushJson(fbdo, path, value);
@@ -418,8 +536,6 @@ bool FirebaseESP8266::push(FirebaseData &fbdo, const String &path, T value, floa
         return pushString(fbdo, path, value, priority);
     else if (std::is_same<T, const String &>::value)
         return pushString(fbdo, path, value, priority);
-    else if (std::is_same<T, const StringSumHelper &>::value)
-        return pushString(fbdo, path, value, priority);
     else if (std::is_same<T, FirebaseJson &>::value)
         return pushJson(fbdo, path, value, priority);
     else if (std::is_same<T, FirebaseJsonArray &>::value)
@@ -438,9 +554,19 @@ bool FirebaseESP8266::pushInt(FirebaseData &fbdo, const String &path, int intVal
     return RTDB.pushInt(&fbdo, path.c_str(), intValue);
 }
 
+bool FirebaseESP8266::pushIntAsync(FirebaseData &fbdo, const String &path, int intValue)
+{
+    return RTDB.pushIntAsync(&fbdo, path.c_str(), intValue);
+}
+
 bool FirebaseESP8266::pushInt(FirebaseData &fbdo, const String &path, int intValue, float priority)
 {
     return RTDB.pushInt(&fbdo, path.c_str(), intValue, priority);
+}
+
+bool FirebaseESP8266::pushIntAsync(FirebaseData &fbdo, const String &path, int intValue, float priority)
+{
+    return RTDB.pushIntAsync(&fbdo, path.c_str(), intValue, priority);
 }
 
 bool FirebaseESP8266::pushFloat(FirebaseData &fbdo, const String &path, float floatValue)
@@ -448,7 +574,17 @@ bool FirebaseESP8266::pushFloat(FirebaseData &fbdo, const String &path, float fl
     return RTDB.pushFloat(&fbdo, path.c_str(), floatValue);
 }
 
+bool FirebaseESP8266::pushFloatAsync(FirebaseData &fbdo, const String &path, float floatValue)
+{
+    return RTDB.pushFloatAsync(&fbdo, path.c_str(), floatValue);
+}
+
 bool FirebaseESP8266::pushFloat(FirebaseData &fbdo, const String &path, float floatValue, float priority)
+{
+    return RTDB.pushFloat(&fbdo, path.c_str(), floatValue, priority);
+}
+
+bool FirebaseESP8266::pushFloatAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority)
 {
     return RTDB.pushFloat(&fbdo, path.c_str(), floatValue, priority);
 }
@@ -458,9 +594,19 @@ bool FirebaseESP8266::pushDouble(FirebaseData &fbdo, const String &path, double 
     return RTDB.pushDouble(&fbdo, path.c_str(), doubleValue);
 }
 
+bool FirebaseESP8266::pushDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue)
+{
+    return RTDB.pushDoubleAsync(&fbdo, path.c_str(), doubleValue);
+}
+
 bool FirebaseESP8266::pushDouble(FirebaseData &fbdo, const String &path, double doubleValue, float priority)
 {
     return RTDB.pushDouble(&fbdo, path.c_str(), doubleValue, priority);
+}
+
+bool FirebaseESP8266::pushDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority)
+{
+    return RTDB.pushDoubleAsync(&fbdo, path.c_str(), doubleValue, priority);
 }
 
 bool FirebaseESP8266::pushBool(FirebaseData &fbdo, const String &path, bool boolValue)
@@ -468,9 +614,19 @@ bool FirebaseESP8266::pushBool(FirebaseData &fbdo, const String &path, bool bool
     return RTDB.pushBool(&fbdo, path.c_str(), boolValue);
 }
 
+bool FirebaseESP8266::pushBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue)
+{
+    return RTDB.pushBoolAsync(&fbdo, path.c_str(), boolValue);
+}
+
 bool FirebaseESP8266::pushBool(FirebaseData &fbdo, const String &path, bool boolValue, float priority)
 {
     return RTDB.pushBool(&fbdo, path.c_str(), boolValue, priority);
+}
+
+bool FirebaseESP8266::pushBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority)
+{
+    return RTDB.pushBoolAsync(&fbdo, path.c_str(), boolValue, priority);
 }
 
 bool FirebaseESP8266::pushString(FirebaseData &fbdo, const String &path, const String &stringValue)
@@ -478,9 +634,19 @@ bool FirebaseESP8266::pushString(FirebaseData &fbdo, const String &path, const S
     return RTDB.pushString(&fbdo, path.c_str(), stringValue);
 }
 
+bool FirebaseESP8266::pushStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue)
+{
+    return RTDB.pushStringAsync(&fbdo, path.c_str(), stringValue);
+}
+
 bool FirebaseESP8266::pushString(FirebaseData &fbdo, const String &path, const String &stringValue, float priority)
 {
     return RTDB.pushString(&fbdo, path.c_str(), stringValue, priority);
+}
+
+bool FirebaseESP8266::pushStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority)
+{
+    return RTDB.pushStringAsync(&fbdo, path.c_str(), stringValue, priority);
 }
 
 bool FirebaseESP8266::pushJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json)
@@ -488,9 +654,19 @@ bool FirebaseESP8266::pushJSON(FirebaseData &fbdo, const String &path, FirebaseJ
     return RTDB.pushJSON(&fbdo, path.c_str(), &json);
 }
 
+bool FirebaseESP8266::pushJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json)
+{
+    return RTDB.pushJSONAsync(&fbdo, path.c_str(), &json);
+}
+
 bool FirebaseESP8266::pushJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
 {
     return RTDB.pushJSON(&fbdo, path.c_str(), &json, priority);
+}
+
+bool FirebaseESP8266::pushJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
+{
+    return RTDB.pushJSONAsync(&fbdo, path.c_str(), &json, priority);
 }
 
 bool FirebaseESP8266::pushArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr)
@@ -498,9 +674,19 @@ bool FirebaseESP8266::pushArray(FirebaseData &fbdo, const String &path, Firebase
     return RTDB.pushArray(&fbdo, path.c_str(), &arr);
 }
 
+bool FirebaseESP8266::pushArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr)
+{
+    return RTDB.pushArrayAsync(&fbdo, path.c_str(), &arr);
+}
+
 bool FirebaseESP8266::pushArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority)
 {
     return RTDB.pushArray(&fbdo, path.c_str(), &arr, priority);
+}
+
+bool FirebaseESP8266::pushArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority)
+{
+    return RTDB.pushArrayAsync(&fbdo, path.c_str(), &arr, priority);
 }
 
 bool FirebaseESP8266::pushBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size)
@@ -508,9 +694,19 @@ bool FirebaseESP8266::pushBlob(FirebaseData &fbdo, const String &path, uint8_t *
     return RTDB.pushBlob(&fbdo, path.c_str(), blob, size);
 }
 
+bool FirebaseESP8266::pushBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size)
+{
+    return RTDB.pushBlobAsync(&fbdo, path.c_str(), blob, size);
+}
+
 bool FirebaseESP8266::pushBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority)
 {
     return RTDB.pushBlob(&fbdo, path.c_str(), blob, size, priority);
+}
+
+bool FirebaseESP8266::pushBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority)
+{
+    return RTDB.pushBlobAsync(&fbdo, path.c_str(), blob, size, priority);
 }
 
 bool FirebaseESP8266::pushFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName)
@@ -518,9 +714,19 @@ bool FirebaseESP8266::pushFile(FirebaseData &fbdo, uint8_t storageType, const St
     return RTDB.pushFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str());
 }
 
+bool FirebaseESP8266::pushFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName)
+{
+    return RTDB.pushFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str());
+}
+
 bool FirebaseESP8266::pushFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority)
 {
     return RTDB.pushFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority);
+}
+
+bool FirebaseESP8266::pushFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority)
+{
+    return RTDB.pushFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority);
 }
 
 bool FirebaseESP8266::pushTimestamp(FirebaseData &fbdo, const String &path)
@@ -528,9 +734,19 @@ bool FirebaseESP8266::pushTimestamp(FirebaseData &fbdo, const String &path)
     return RTDB.pushTimestamp(&fbdo, path.c_str());
 }
 
+bool FirebaseESP8266::pushTimestampAsync(FirebaseData &fbdo, const String &path)
+{
+    return RTDB.pushTimestampAsync(&fbdo, path.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, int intValue)
 {
     return RTDB.setInt(&fbdo, path.c_str(), intValue);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, int intValue)
+{
+    return RTDB.setIntAsync(&fbdo, path.c_str(), intValue);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, int intValue, float priority)
@@ -538,9 +754,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, int intValue, 
     return RTDB.setInt(&fbdo, path.c_str(), intValue, priority);
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, int intValue, float priority)
+{
+    return RTDB.setIntAsync(&fbdo, path.c_str(), intValue, priority);
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, int intValue, const String &ETag)
 {
     return RTDB.setInt(&fbdo, path.c_str(), intValue, ETag.c_str());
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, int intValue, const String &ETag)
+{
+    return RTDB.setIntAsync(&fbdo, path.c_str(), intValue, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, int intValue, float priority, const String &ETag)
@@ -548,9 +774,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, int intValue, 
     return RTDB.setInt(&fbdo, path.c_str(), intValue, priority, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, int intValue, float priority, const String &ETag)
+{
+    return RTDB.setIntAsync(&fbdo, path.c_str(), intValue, priority, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, float floatValue)
 {
     return RTDB.setFloat(&fbdo, path.c_str(), floatValue);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, float floatValue)
+{
+    return RTDB.setFloatAsync(&fbdo, path.c_str(), floatValue);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, float floatValue, float priority)
@@ -558,9 +794,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, float floatVal
     return RTDB.setFloat(&fbdo, path.c_str(), floatValue, priority);
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority)
+{
+    return RTDB.setFloatAsync(&fbdo, path.c_str(), floatValue, priority);
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, float floatValue, const String &ETag)
 {
     return RTDB.setFloat(&fbdo, path.c_str(), floatValue, ETag.c_str());
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, float floatValue, const String &ETag)
+{
+    return RTDB.setFloatAsync(&fbdo, path.c_str(), floatValue, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, float floatValue, float priority, const String &ETag)
@@ -568,9 +814,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, float floatVal
     return RTDB.setFloat(&fbdo, path.c_str(), floatValue, priority, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority, const String &ETag)
+{
+    return RTDB.setFloatAsync(&fbdo, path.c_str(), floatValue, priority, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, double doubleValue)
 {
     return RTDB.setDouble(&fbdo, path.c_str(), doubleValue);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, double doubleValue)
+{
+    return RTDB.setDoubleAsync(&fbdo, path.c_str(), doubleValue);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, double doubleValue, float priority)
@@ -578,9 +834,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, double doubleV
     return RTDB.setDouble(&fbdo, path.c_str(), doubleValue, priority);
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority)
+{
+    return RTDB.setDoubleAsync(&fbdo, path.c_str(), doubleValue, priority);
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, double doubleValue, const String &ETag)
 {
     return RTDB.setDouble(&fbdo, path.c_str(), doubleValue, ETag.c_str());
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, double doubleValue, const String &ETag)
+{
+    return RTDB.setDoubleAsync(&fbdo, path.c_str(), doubleValue, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, double doubleValue, float priority, const String &ETag)
@@ -588,9 +854,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, double doubleV
     return RTDB.setDouble(&fbdo, path.c_str(), doubleValue, priority, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority, const String &ETag)
+{
+    return RTDB.setDoubleAsync(&fbdo, path.c_str(), doubleValue, priority, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, bool boolValue)
 {
     return RTDB.setBool(&fbdo, path.c_str(), boolValue);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, bool boolValue)
+{
+    return RTDB.setBoolAsync(&fbdo, path.c_str(), boolValue);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, bool boolValue, float priority)
@@ -598,9 +874,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, bool boolValue
     return RTDB.setBool(&fbdo, path.c_str(), boolValue, priority);
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority)
+{
+    return RTDB.setBoolAsync(&fbdo, path.c_str(), boolValue, priority);
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, bool boolValue, const String &ETag)
 {
     return RTDB.setBool(&fbdo, path.c_str(), boolValue, ETag.c_str());
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, bool boolValue, const String &ETag)
+{
+    return RTDB.setBoolAsync(&fbdo, path.c_str(), boolValue, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, bool boolValue, float priority, const String &ETag)
@@ -608,9 +894,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, bool boolValue
     return RTDB.setBool(&fbdo, path.c_str(), boolValue, priority, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority, const String &ETag)
+{
+    return RTDB.setBoolAsync(&fbdo, path.c_str(), boolValue, priority, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const char *stringValue)
 {
     return RTDB.setString(&fbdo, path.c_str(), stringValue);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, const char *stringValue)
+{
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const String &stringValue)
@@ -618,9 +914,9 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const String &
     return RTDB.setString(&fbdo, path.c_str(), stringValue);
 }
 
-bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue)
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, const String &stringValue)
 {
-    return RTDB.setString(&fbdo, path.c_str(), stringValue);
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const char *stringValue, float priority)
@@ -628,14 +924,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const char *st
     return RTDB.setString(&fbdo, path.c_str(), stringValue, priority);
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, const char *stringValue, float priority)
+{
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, priority);
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const String &stringValue, float priority)
 {
     return RTDB.setString(&fbdo, path.c_str(), stringValue, priority);
 }
 
-bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue, float priority)
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority)
 {
-    return RTDB.setString(&fbdo, path.c_str(), stringValue, priority);
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, priority);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const char *stringValue, const String &ETag)
@@ -643,14 +944,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const char *st
     return RTDB.setString(&fbdo, path.c_str(), stringValue, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, const char *stringValue, const String &ETag)
+{
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const String &stringValue, const String &ETag)
 {
     return RTDB.setString(&fbdo, path.c_str(), stringValue, ETag.c_str());
 }
 
-bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue, const String &ETag)
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, const String &stringValue, const String &ETag)
 {
-    return RTDB.setString(&fbdo, path.c_str(), stringValue, ETag.c_str());
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const char *stringValue, float priority, const String &ETag)
@@ -658,14 +964,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const char *st
     return RTDB.setString(&fbdo, path.c_str(), stringValue, priority, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, const char *stringValue, float priority, const String &ETag)
+{
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, priority, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const String &stringValue, float priority, const String &ETag)
 {
     return RTDB.setString(&fbdo, path.c_str(), stringValue, priority, ETag.c_str());
 }
 
-bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, const StringSumHelper &stringValue, float priority, const String &ETag)
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority, const String &ETag)
 {
-    return RTDB.setString(&fbdo, path.c_str(), stringValue, priority, ETag.c_str());
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJson &json)
@@ -673,9 +984,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJson &
     return RTDB.setJSON(&fbdo, path.c_str(), &json);
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json)
+{
+    return RTDB.setJSONAsync(&fbdo, path.c_str(), &json);
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr)
 {
     return RTDB.setArray(&fbdo, path.c_str(), &arr);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr)
+{
+    return RTDB.setArrayAsync(&fbdo, path.c_str(), &arr);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
@@ -683,9 +1004,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJson &
     return RTDB.setJSON(&fbdo, path.c_str(), &json, priority);
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
+{
+    return RTDB.setJSONAsync(&fbdo, path.c_str(), &json, priority);
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority)
 {
     return RTDB.setArray(&fbdo, path.c_str(), &arr, priority);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority)
+{
+    return RTDB.setArrayAsync(&fbdo, path.c_str(), &arr, priority);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJson &json, const String &ETag)
@@ -693,9 +1024,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJson &
     return RTDB.setJSON(&fbdo, path.c_str(), &json, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, const String &ETag)
+{
+    return RTDB.setJSONAsync(&fbdo, path.c_str(), &json, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, const String &ETag)
 {
     return RTDB.setArray(&fbdo, path.c_str(), &arr, ETag.c_str());
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, const String &ETag)
+{
+    return RTDB.setArrayAsync(&fbdo, path.c_str(), &arr, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority, const String &ETag)
@@ -703,9 +1044,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJson &
     return RTDB.setJSON(&fbdo, path.c_str(), &json, priority, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority, const String &ETag)
+{
+    return RTDB.setJSONAsync(&fbdo, path.c_str(), &json, priority, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority, const String &ETag)
 {
     return RTDB.setArray(&fbdo, path.c_str(), &arr, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority, const String &ETag)
+{
+    return RTDB.setArrayAsync(&fbdo, path.c_str(), &arr, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size)
@@ -713,9 +1064,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, uint8_t *blob,
     return RTDB.setBlob(&fbdo, path.c_str(), blob, size);
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size)
+{
+    return RTDB.setBlobAsync(&fbdo, path.c_str(), blob, size);
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority)
 {
     return RTDB.setBlob(&fbdo, path.c_str(), blob, size, priority);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority)
+{
+    return RTDB.setBlobAsync(&fbdo, path.c_str(), blob, size, priority);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, const String &ETag)
@@ -723,9 +1084,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, uint8_t *blob,
     return RTDB.setBlob(&fbdo, path.c_str(), blob, size, ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, const String &ETag)
+{
+    return RTDB.setBlobAsync(&fbdo, path.c_str(), blob, size, ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority, const String &ETag)
 {
     return RTDB.setBlob(&fbdo, path.c_str(), blob, size, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority, const String &ETag)
+{
+    return RTDB.setBlobAsync(&fbdo, path.c_str(), blob, size, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName)
@@ -733,9 +1104,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, uint8_t storageType, const String 
     return RTDB.setFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName)
+{
+    return RTDB.setFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority)
 {
     return RTDB.setFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority);
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority)
+{
+    return RTDB.setFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority);
 }
 
 bool FirebaseESP8266::set(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, const String &ETag)
@@ -743,9 +1124,19 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, uint8_t storageType, const String 
     return RTDB.setFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), ETag.c_str());
 }
 
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, const String &ETag)
+{
+    return RTDB.setFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), ETag.c_str());
+}
+
 bool FirebaseESP8266::set(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority, const String &ETag)
 {
     return RTDB.setFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority, const String &ETag)
+{
+    return RTDB.setFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority, ETag.c_str());
 }
 
 template <typename T>
@@ -760,8 +1151,6 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, T value)
     else if (std::is_same<T, const char *>::value)
         return setString(fbdo, path, value);
     else if (std::is_same<T, const String &>::value)
-        return setString(fbdo, path, value);
-    else if (std::is_same<T, const StringSumHelper &>::value)
         return setString(fbdo, path, value);
     else if (std::is_same<T, FirebaseJson &>::value)
         return setJson(fbdo, path, value);
@@ -791,8 +1180,6 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, T value, float
         return setString(fbdo, path, value, priority);
     else if (std::is_same<T, const String &>::value)
         return setString(fbdo, path, value, priority);
-    else if (std::is_same<T, const StringSumHelper &>::value)
-        return setString(fbdo, path, value, priority);
     else if (std::is_same<T, FirebaseJson &>::value)
         return setJson(fbdo, path, value, priority);
     else if (std::is_same<T, FirebaseJsonArray &>::value)
@@ -818,8 +1205,6 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, T value, const
     else if (std::is_same<T, const char *>::value)
         return setString(fbdo, path, value, ETag);
     else if (std::is_same<T, const String &>::value)
-        return setString(fbdo, path, value, ETag);
-    else if (std::is_same<T, const StringSumHelper &>::value)
         return setString(fbdo, path, value, ETag);
     else if (std::is_same<T, FirebaseJson &>::value)
         return setJson(fbdo, path, value, ETag);
@@ -847,8 +1232,6 @@ bool FirebaseESP8266::set(FirebaseData &fbdo, const String &path, T value, float
         return setString(fbdo, path, value, priority, ETag);
     else if (std::is_same<T, const String &>::value)
         return setString(fbdo, path, value, priority, ETag);
-    else if (std::is_same<T, const StringSumHelper &>::value)
-        return setString(fbdo, path, value, priority, ETag);
     else if (std::is_same<T, FirebaseJson &>::value)
         return setJson(fbdo, path, value, priority, ETag);
     else if (std::is_same<T, FirebaseJsonArray &>::value)
@@ -867,9 +1250,19 @@ bool FirebaseESP8266::setInt(FirebaseData &fbdo, const String &path, int intValu
     return RTDB.setInt(&fbdo, path.c_str(), intValue);
 }
 
+bool FirebaseESP8266::setIntAsync(FirebaseData &fbdo, const String &path, int intValue)
+{
+    return RTDB.setIntAsync(&fbdo, path.c_str(), intValue);
+}
+
 bool FirebaseESP8266::setInt(FirebaseData &fbdo, const String &path, int intValue, float priority)
 {
     return RTDB.setInt(&fbdo, path.c_str(), intValue, priority);
+}
+
+bool FirebaseESP8266::setIntAsync(FirebaseData &fbdo, const String &path, int intValue, float priority)
+{
+    return RTDB.setIntAsync(&fbdo, path.c_str(), intValue, priority);
 }
 
 bool FirebaseESP8266::setInt(FirebaseData &fbdo, const String &path, int intValue, const String &ETag)
@@ -877,9 +1270,19 @@ bool FirebaseESP8266::setInt(FirebaseData &fbdo, const String &path, int intValu
     return RTDB.setInt(&fbdo, path.c_str(), intValue, ETag.c_str());
 }
 
+bool FirebaseESP8266::setIntAsync(FirebaseData &fbdo, const String &path, int intValue, const String &ETag)
+{
+    return RTDB.setIntAsync(&fbdo, path.c_str(), intValue, ETag.c_str());
+}
+
 bool FirebaseESP8266::setInt(FirebaseData &fbdo, const String &path, int intValue, float priority, const String &ETag)
 {
     return RTDB.setInt(&fbdo, path.c_str(), intValue, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setIntAsync(FirebaseData &fbdo, const String &path, int intValue, float priority, const String &ETag)
+{
+    return RTDB.setIntAsync(&fbdo, path.c_str(), intValue, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setFloat(FirebaseData &fbdo, const String &path, float floatValue)
@@ -887,9 +1290,19 @@ bool FirebaseESP8266::setFloat(FirebaseData &fbdo, const String &path, float flo
     return RTDB.setFloat(&fbdo, path.c_str(), floatValue);
 }
 
+bool FirebaseESP8266::setFloatAsync(FirebaseData &fbdo, const String &path, float floatValue)
+{
+    return RTDB.setFloatAsync(&fbdo, path.c_str(), floatValue);
+}
+
 bool FirebaseESP8266::setFloat(FirebaseData &fbdo, const String &path, float floatValue, float priority)
 {
     return RTDB.setFloat(&fbdo, path.c_str(), floatValue, priority);
+}
+
+bool FirebaseESP8266::setFloatAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority)
+{
+    return RTDB.setFloatAsync(&fbdo, path.c_str(), floatValue, priority);
 }
 
 bool FirebaseESP8266::setFloat(FirebaseData &fbdo, const String &path, float floatValue, const String &ETag)
@@ -897,9 +1310,19 @@ bool FirebaseESP8266::setFloat(FirebaseData &fbdo, const String &path, float flo
     return RTDB.setFloat(&fbdo, path.c_str(), floatValue, ETag.c_str());
 }
 
+bool FirebaseESP8266::setFloatAsync(FirebaseData &fbdo, const String &path, float floatValue, const String &ETag)
+{
+    return RTDB.setFloatAsync(&fbdo, path.c_str(), floatValue, ETag.c_str());
+}
+
 bool FirebaseESP8266::setFloat(FirebaseData &fbdo, const String &path, float floatValue, float priority, const String &ETag)
 {
     return RTDB.setFloat(&fbdo, path.c_str(), floatValue, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setFloatAsync(FirebaseData &fbdo, const String &path, float floatValue, float priority, const String &ETag)
+{
+    return RTDB.setFloatAsync(&fbdo, path.c_str(), floatValue, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setDouble(FirebaseData &fbdo, const String &path, double doubleValue)
@@ -907,9 +1330,19 @@ bool FirebaseESP8266::setDouble(FirebaseData &fbdo, const String &path, double d
     return RTDB.setDouble(&fbdo, path.c_str(), doubleValue);
 }
 
+bool FirebaseESP8266::setDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue)
+{
+    return RTDB.setDoubleAsync(&fbdo, path.c_str(), doubleValue);
+}
+
 bool FirebaseESP8266::setDouble(FirebaseData &fbdo, const String &path, double doubleValue, float priority)
 {
     return RTDB.setDouble(&fbdo, path.c_str(), doubleValue, priority);
+}
+
+bool FirebaseESP8266::setDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority)
+{
+    return RTDB.setDoubleAsync(&fbdo, path.c_str(), doubleValue, priority);
 }
 
 bool FirebaseESP8266::setDouble(FirebaseData &fbdo, const String &path, double doubleValue, const String &ETag)
@@ -917,9 +1350,19 @@ bool FirebaseESP8266::setDouble(FirebaseData &fbdo, const String &path, double d
     return RTDB.setDouble(&fbdo, path.c_str(), doubleValue, ETag.c_str());
 }
 
+bool FirebaseESP8266::setDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue, const String &ETag)
+{
+    return RTDB.setDoubleAsync(&fbdo, path.c_str(), doubleValue, ETag.c_str());
+}
+
 bool FirebaseESP8266::setDouble(FirebaseData &fbdo, const String &path, double doubleValue, float priority, const String &ETag)
 {
     return RTDB.setDouble(&fbdo, path.c_str(), doubleValue, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setDoubleAsync(FirebaseData &fbdo, const String &path, double doubleValue, float priority, const String &ETag)
+{
+    return RTDB.setDoubleAsync(&fbdo, path.c_str(), doubleValue, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setBool(FirebaseData &fbdo, const String &path, bool boolValue)
@@ -927,9 +1370,19 @@ bool FirebaseESP8266::setBool(FirebaseData &fbdo, const String &path, bool boolV
     return RTDB.setBool(&fbdo, path.c_str(), boolValue);
 }
 
+bool FirebaseESP8266::setBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue)
+{
+    return RTDB.setBoolAsync(&fbdo, path.c_str(), boolValue);
+}
+
 bool FirebaseESP8266::setBool(FirebaseData &fbdo, const String &path, bool boolValue, float priority)
 {
     return RTDB.setBool(&fbdo, path.c_str(), boolValue, priority);
+}
+
+bool FirebaseESP8266::setBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority)
+{
+    return RTDB.setBoolAsync(&fbdo, path.c_str(), boolValue, priority);
 }
 
 bool FirebaseESP8266::setBool(FirebaseData &fbdo, const String &path, bool boolValue, const String &ETag)
@@ -937,9 +1390,19 @@ bool FirebaseESP8266::setBool(FirebaseData &fbdo, const String &path, bool boolV
     return RTDB.setBool(&fbdo, path.c_str(), boolValue, ETag.c_str());
 }
 
+bool FirebaseESP8266::setBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue, const String &ETag)
+{
+    return RTDB.setBoolAsync(&fbdo, path.c_str(), boolValue, ETag.c_str());
+}
+
 bool FirebaseESP8266::setBool(FirebaseData &fbdo, const String &path, bool boolValue, float priority, const String &ETag)
 {
     return RTDB.setBool(&fbdo, path.c_str(), boolValue, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setBoolAsync(FirebaseData &fbdo, const String &path, bool boolValue, float priority, const String &ETag)
+{
+    return RTDB.setBoolAsync(&fbdo, path.c_str(), boolValue, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setString(FirebaseData &fbdo, const String &path, const String &stringValue)
@@ -947,10 +1410,19 @@ bool FirebaseESP8266::setString(FirebaseData &fbdo, const String &path, const St
     return RTDB.setString(&fbdo, path.c_str(), stringValue);
 }
 
+bool FirebaseESP8266::setStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue)
+{
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue);
+}
+
 bool FirebaseESP8266::setString(FirebaseData &fbdo, const String &path, const String &stringValue, float priority)
 {
-
     return RTDB.setString(&fbdo, path.c_str(), stringValue, priority);
+}
+
+bool FirebaseESP8266::setStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority)
+{
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, priority);
 }
 
 bool FirebaseESP8266::setString(FirebaseData &fbdo, const String &path, const String &stringValue, const String &ETag)
@@ -958,9 +1430,19 @@ bool FirebaseESP8266::setString(FirebaseData &fbdo, const String &path, const St
     return RTDB.setString(&fbdo, path.c_str(), stringValue, ETag.c_str());
 }
 
+bool FirebaseESP8266::setStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue, const String &ETag)
+{
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, ETag.c_str());
+}
+
 bool FirebaseESP8266::setString(FirebaseData &fbdo, const String &path, const String &stringValue, float priority, const String &ETag)
 {
     return RTDB.setString(&fbdo, path.c_str(), stringValue, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setStringAsync(FirebaseData &fbdo, const String &path, const String &stringValue, float priority, const String &ETag)
+{
+    return RTDB.setStringAsync(&fbdo, path.c_str(), stringValue, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json)
@@ -968,9 +1450,19 @@ bool FirebaseESP8266::setJSON(FirebaseData &fbdo, const String &path, FirebaseJs
     return RTDB.setJSON(&fbdo, path.c_str(), &json);
 }
 
+bool FirebaseESP8266::setJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json)
+{
+    return RTDB.setJSONAsync(&fbdo, path.c_str(), &json);
+}
+
 bool FirebaseESP8266::setJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
 {
     return RTDB.setJSON(&fbdo, path.c_str(), &json, priority);
+}
+
+bool FirebaseESP8266::setJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
+{
+    return RTDB.setJSONAsync(&fbdo, path.c_str(), &json, priority);
 }
 
 bool FirebaseESP8266::setJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json, const String &ETag)
@@ -978,9 +1470,19 @@ bool FirebaseESP8266::setJSON(FirebaseData &fbdo, const String &path, FirebaseJs
     return RTDB.setJSON(&fbdo, path.c_str(), &json, ETag.c_str());
 }
 
+bool FirebaseESP8266::setJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, const String &ETag)
+{
+    return RTDB.setJSONAsync(&fbdo, path.c_str(), &json, ETag.c_str());
+}
+
 bool FirebaseESP8266::setJSON(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority, const String &ETag)
 {
     return RTDB.setJSON(&fbdo, path.c_str(), &json, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setJSONAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority, const String &ETag)
+{
+    return RTDB.setJSONAsync(&fbdo, path.c_str(), &json, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr)
@@ -988,9 +1490,19 @@ bool FirebaseESP8266::setArray(FirebaseData &fbdo, const String &path, FirebaseJ
     return RTDB.setArray(&fbdo, path.c_str(), &arr);
 }
 
+bool FirebaseESP8266::setArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr)
+{
+    return RTDB.setArrayAsync(&fbdo, path.c_str(), &arr);
+}
+
 bool FirebaseESP8266::setArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority)
 {
     return RTDB.setArray(&fbdo, path.c_str(), &arr, priority);
+}
+
+bool FirebaseESP8266::setArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority)
+{
+    return RTDB.setArrayAsync(&fbdo, path.c_str(), &arr, priority);
 }
 
 bool FirebaseESP8266::setArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, const String &ETag)
@@ -998,9 +1510,19 @@ bool FirebaseESP8266::setArray(FirebaseData &fbdo, const String &path, FirebaseJ
     return RTDB.setArray(&fbdo, path.c_str(), &arr, ETag.c_str());
 }
 
+bool FirebaseESP8266::setArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, const String &ETag)
+{
+    return RTDB.setArrayAsync(&fbdo, path.c_str(), &arr, ETag.c_str());
+}
+
 bool FirebaseESP8266::setArray(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority, const String &ETag)
 {
     return RTDB.setArray(&fbdo, path.c_str(), &arr, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setArrayAsync(FirebaseData &fbdo, const String &path, FirebaseJsonArray &arr, float priority, const String &ETag)
+{
+    return RTDB.setArrayAsync(&fbdo, path.c_str(), &arr, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size)
@@ -1008,9 +1530,19 @@ bool FirebaseESP8266::setBlob(FirebaseData &fbdo, const String &path, uint8_t *b
     return RTDB.setBlob(&fbdo, path.c_str(), blob, size);
 }
 
+bool FirebaseESP8266::setBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size)
+{
+    return RTDB.setBlobAsync(&fbdo, path.c_str(), blob, size);
+}
+
 bool FirebaseESP8266::setBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority)
 {
     return RTDB.setBlob(&fbdo, path.c_str(), blob, size, priority);
+}
+
+bool FirebaseESP8266::setBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority)
+{
+    return RTDB.setBlobAsync(&fbdo, path.c_str(), blob, size, priority);
 }
 
 bool FirebaseESP8266::setBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, const String &ETag)
@@ -1018,9 +1550,19 @@ bool FirebaseESP8266::setBlob(FirebaseData &fbdo, const String &path, uint8_t *b
     return RTDB.setBlob(&fbdo, path.c_str(), blob, size, ETag.c_str());
 }
 
+bool FirebaseESP8266::setBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, const String &ETag)
+{
+    return RTDB.setBlobAsync(&fbdo, path.c_str(), blob, size, ETag.c_str());
+}
+
 bool FirebaseESP8266::setBlob(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority, const String &ETag)
 {
     return RTDB.setBlob(&fbdo, path.c_str(), blob, size, priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setBlobAsync(FirebaseData &fbdo, const String &path, uint8_t *blob, size_t size, float priority, const String &ETag)
+{
+    return RTDB.setBlobAsync(&fbdo, path.c_str(), blob, size, priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName)
@@ -1028,9 +1570,19 @@ bool FirebaseESP8266::setFile(FirebaseData &fbdo, uint8_t storageType, const Str
     return RTDB.setFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str());
 }
 
+bool FirebaseESP8266::setFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName)
+{
+    return RTDB.setFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str());
+}
+
 bool FirebaseESP8266::setFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority)
 {
     return RTDB.setFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority);
+}
+
+bool FirebaseESP8266::setFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority)
+{
+    return RTDB.setFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority);
 }
 
 bool FirebaseESP8266::setFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, const String &ETag)
@@ -1038,9 +1590,19 @@ bool FirebaseESP8266::setFile(FirebaseData &fbdo, uint8_t storageType, const Str
     return RTDB.setFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), ETag.c_str());
 }
 
+bool FirebaseESP8266::setFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, const String &ETag)
+{
+    return RTDB.setFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), ETag.c_str());
+}
+
 bool FirebaseESP8266::setFile(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority, const String &ETag)
 {
     return RTDB.setFile(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority, ETag.c_str());
+}
+
+bool FirebaseESP8266::setFileAsync(FirebaseData &fbdo, uint8_t storageType, const String &path, const String &fileName, float priority, const String &ETag)
+{
+    return RTDB.setFileAsync(&fbdo, getMemStorageType(storageType), path.c_str(), fileName.c_str(), priority, ETag.c_str());
 }
 
 bool FirebaseESP8266::setTimestamp(FirebaseData &fbdo, const String &path)
@@ -1048,9 +1610,19 @@ bool FirebaseESP8266::setTimestamp(FirebaseData &fbdo, const String &path)
     return RTDB.setTimestamp(&fbdo, path.c_str());
 }
 
+bool FirebaseESP8266::setTimestampAsync(FirebaseData &fbdo, const String &path)
+{
+    return RTDB.setTimestampAsync(&fbdo, path.c_str());
+}
+
 bool FirebaseESP8266::updateNode(FirebaseData &fbdo, const String path, FirebaseJson &json)
 {
     return RTDB.updateNode(&fbdo, path.c_str(), &json);
+}
+
+bool FirebaseESP8266::updateNodeAsync(FirebaseData &fbdo, const String path, FirebaseJson &json)
+{
+    return RTDB.updateNodeAsync(&fbdo, path.c_str(), &json);
 }
 
 bool FirebaseESP8266::updateNode(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
@@ -1058,14 +1630,29 @@ bool FirebaseESP8266::updateNode(FirebaseData &fbdo, const String &path, Firebas
     return RTDB.updateNode(&fbdo, path.c_str(), &json, priority);
 }
 
+bool FirebaseESP8266::updateNodeAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
+{
+    return RTDB.updateNodeAsync(&fbdo, path.c_str(), &json, priority);
+}
+
 bool FirebaseESP8266::updateNodeSilent(FirebaseData &fbdo, const String &path, FirebaseJson &json)
 {
     return RTDB.updateNodeSilent(&fbdo, path.c_str(), &json);
 }
 
+bool FirebaseESP8266::updateNodeSilentAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json)
+{
+    return RTDB.updateNodeSilentAsync(&fbdo, path.c_str(), &json);
+}
+
 bool FirebaseESP8266::updateNodeSilent(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
 {
     return RTDB.updateNodeSilent(&fbdo, path.c_str(), &json, priority);
+}
+
+bool FirebaseESP8266::updateNodeSilentAsync(FirebaseData &fbdo, const String &path, FirebaseJson &json, float priority)
+{
+    return RTDB.updateNodeSilentAsync(&fbdo, path.c_str(), &json, priority);
 }
 
 bool FirebaseESP8266::get(FirebaseData &fbdo, const String &path)
@@ -1393,6 +1980,11 @@ bool FirebaseESP8266::sdBegin(int8_t ss)
 fb_esp_mem_storage_type FirebaseESP8266::getMemStorageType(uint8_t old_type)
 {
     return (fb_esp_mem_storage_type)(old_type);
+}
+
+bool FirebaseESP8266::setSystemTime(time_t ts)
+{
+    return ut->setTimestamp(ts) == 0;
 }
 
 FirebaseESP8266 Firebase = FirebaseESP8266();
