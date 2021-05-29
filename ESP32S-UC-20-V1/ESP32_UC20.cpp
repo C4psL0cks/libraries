@@ -26,9 +26,9 @@ void UC20::SetPowerKeyPin()
 {
 	pinMode(START_PIN, OUTPUT);
 	digitalWrite(START_PIN, LOW);
-	delay(500);
+	delay(200);
 	digitalWrite(START_PIN, HIGH);
-	delay(500);
+	delay(200);
 }
 
 bool UC20::PowerOn()
