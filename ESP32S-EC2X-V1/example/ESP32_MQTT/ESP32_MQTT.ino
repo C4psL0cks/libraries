@@ -1,5 +1,5 @@
 #include <HardwareSerial.h>
-#include "ESP32_UC20.h"
+#include "ESP32_EC2X.h"
 #include "internet.h"
 #include "uc_mqtt.h"
 
