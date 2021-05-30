@@ -1,5 +1,5 @@
 #include <HardwareSerial.h>
-#include "TEE_UC20.h"
+#include "ESP32S_UC20.h"
 #include "internet.h"
 #include "File.h"
 #include "ftp.h"
@@ -20,7 +20,7 @@
 #define PORT      21
 
 #define PATH      "/test"
-#define FILENAME  "/sensor.csv"
+#define FILENAME  "/A.wav"
 INTERNET net;
 UC_FILE file;
 FTP ftp;
@@ -39,8 +39,8 @@ void data_out(char data)
 {
   Serial.write(data);
 }
-void setup()
-{
+void setup() {
+
   Serial.begin(9600);
   gsm.begin(&mySerial, 9600, RXPIN, TXPIN);
   gsm.Event_debug = debug;
@@ -62,6 +62,20 @@ void setup()
   Serial.println(F("Show My IP"));
   Serial.println(net.GetIP());
 
+}
+
+void loop() {
+
+  while (gsm.available()) {
+    Serial.write(gsm.read());
+  }
+  while (Serial.available()) {
+    gsm.write(Serial.read());
+  }
+  Record();
+}
+
+void Record() {
   ftp.begin(1);
   Serial.println(F("Set FTP Username and Password"));
   ftp.SetUsernamePassword(USERNAME, PASSWORD);
@@ -76,15 +90,19 @@ void setup()
   Serial.println(F("Set Path"));
   Serial.println(ftp.SetPath(PATH));
 
-  Serial.println(F("Wriet Data To UFS"));
-  String data = "Test send file FTP From UC20";
-  write_file(UFS, FILENAME, data);
+  delay(2000);
+  Serial.println(F("Start Record"));
+  audio.StartWAVRecord("UFS", "A", false);
+  delay(10000);
+  audio.StopRecord();
+  Serial.println(F("Stop Record"));
+  delay(1000);
 
   Serial.println(F("FTP PUT To Server"));
   ftp.put(FILENAME, UFS, FILENAME, 0);
 
-  Serial.println(F("Clear data in UFS"));
   file.Delete(UFS, "*");
+  Serial.println(F("Clear data in UFS"));
 
   Serial.println(F("List File in Server"));
   ftp.ListOutput = debug;
@@ -94,32 +112,4 @@ void setup()
   Serial.println(ftp.Logout());
   Serial.println(F("Disconnect net"));
   net.DisConnect();
-}
-void write_file(String pattern, String file_name, String data)
-{
-  int handle = file.Open(pattern, file_name);
-  if (handle != -1)
-  {
-    if (file.BeginWrite(handle, data.length()))
-    {
-      file.Print(data);
-      file.WaitFinish();
-    }
-  }
-  file.Close(handle);
-}
-void read_file(String pattern, String file_name)
-{
-  file.DataOutput =  data_out;
-  file.ReadFile(pattern, file_name);
-}
-
-void loop() {
-
-  while (gsm.available()) {
-    Serial.write(gsm.read());
-  }
-  while (Serial.available()) {
-    gsm.write(Serial.read());
-  }
 }

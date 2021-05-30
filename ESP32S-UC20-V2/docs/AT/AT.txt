@@ -1,3 +1,56 @@
+Start 
+
+AT
+ATI
+ATE0
+AT+COPS?
+AT+CPIN?
+AT+CSQ
+AT+QSIMSTAT=?
+AT+QSIMSTAT?
+AT+QSIMSTAT=0,1
+AT+QSIMSTAT=1
+
+
+Record Media File
+
+WAV_PCM16
+AT+QAUDRD=1,"A.wav",13,0 //up
+AT+QAUDRD=1,"A.wav",13,1 //down
+AT+QAUDRD=0 
+
+WAV_ALAW
+AT+QAUDRD=1,"A.wav",14,0 //up
+AT+QAUDRD=1,"B.wav",14,1 //down
+AT+QAUDRD=0 
+
+WAV_ULAW
+AT+QAUDRD=1,"A.wav",15,0 //up
+AT+QAUDRD=1,"B.wav",15,1 //down
+AT+QAUDRD=0 
+
+
+Play Wave File 
+AT+QFLST
+AT+QFLST="*"
+AT+QFLST="RAM:*"
+
+AT+QPSND=1,"A.wav",0
+
+*if AT+QAUDRD=1,"A.wav",14,0 Can't listen, but it works
+
+
+******************************
+else setup
+AT+QTONEDET=?
+AT+QTONEDET?
+AT+QTONEDET=<enable>
+Enable/disable DTMF detection
+0 Disable
+1 Enable 
+
+
+
 AT+QGPS=1 // start
 15:40:52.111 -> OK
 

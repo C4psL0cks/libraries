@@ -1,5 +1,5 @@
 #include <HardwareSerial.h>
-#include "TEE_UC20.h"
+#include "ESP32S_UC20.h"
 #include "internet.h"
 #include "http.h"
 #include "File.h"
