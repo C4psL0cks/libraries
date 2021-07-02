@@ -1,14 +1,7 @@
-Hacked up Socket.io library
-Original from: https://github.com/washo4evr/Socket.io-v1.x-Library
-
-Not attempting to make these changes integratable back to the master...
-
-===
-
-# Socket.io-v1.x-Library
+# Socket.io Library for v1.x and v2.x
 Socket.io Library for Arduino
 
-Works with W5100 & ENC28J60 as well as ESP8266
+Works with W5100 & ENC28J60 as well as ESP8266 and ESP32 (beta)
 
 Library will not work when the ESP8266 is being driven by a Uno
 
